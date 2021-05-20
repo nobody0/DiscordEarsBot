@@ -294,10 +294,16 @@ function speak_impl(voice_Connection, mapKey) {
             const duration = buffer.length / 48000 / 4;
             console.log("duration: " + duration)
 
-            if (duration < 1.0 || duration > 19) { // 20 seconds max dur
-                console.log("TOO SHORT / TOO LONG; SKPPING")
+            if (duration < 1.0) { // 1 seconds min dur
+                console.log("TOO SHORT; SKPPING")
                 return;
             }
+            /*
+            if (duration > 19) { // 20 seconds max dur
+                console.log("TOO LONG; SKPPING")
+                return;
+            }
+            */
 
             try {
                 let new_buffer = await convert_audio(buffer)
@@ -325,38 +331,57 @@ function process_commands_query(txt, mapKey, user) {
 //////////////// SPEECH //////////////////
 //////////////////////////////////////////
 async function transcribe(buffer) {
-
   return transcribe_witai(buffer)
-  // return transcribe_gspeech(buffer)
+  //return transcribe_gspeech(buffer)
 }
 
 // WitAI
-let witAI_lastcallTS = null;
+let witAI_lastcallTS = 0;
 const witClient = require('node-witai-speech');
 async function transcribe_witai(buffer) {
+    //TODO this should ideally not be implemented here, audioStream.on('data' to handle partial stuff
+    //TODO dont jsut split at the 19 seconds mark, try to find some silence
+    const duration = buffer.length / 48000 / 2;
+    if (duration > 19) {
+        const stepSize = 48000 * 2 * 19;
+        let begin = 0;
+        let combinedResult = "";
+        do {
+            combinedResult += " " + await transcribe_witai_api(buffer.slice(begin, begin + stepSize));
+
+            begin += stepSize;
+        } while (begin < buffer.length)
+        
+        return combinedResult;
+    }
+
+    return await transcribe_witai_api(buffer);
+}
+
+async function transcribe_witai_api(buffer) {
     try {
         // ensure we do not send more than one request per second
-        if (witAI_lastcallTS != null) {
-            let now = Math.floor(new Date());    
-            while (now - witAI_lastcallTS < 1000) {
-                console.log('sleep')
-                await sleep(100);
-                now = Math.floor(new Date());
-            }
+        let now = Date.now();
+        while (now - witAI_lastcallTS < 1000) {
+            console.log('sleep')
+            await sleep(100);
+            now = Date.now();
         }
     } catch (e) {
         console.log('transcribe_witai 837:' + e)
     }
 
     try {
-        console.log('transcribe_witai')
+        console.log('transcribe_witai_api')
+
         const extractSpeechIntent = util.promisify(witClient.extractSpeechIntent);
         var stream = Readable.from(buffer);
         const contenttype = "audio/raw;encoding=signed-integer;bits=16;rate=48k;endian=little"
         const output = await extractSpeechIntent(WITAPIKEY, stream, contenttype)
-        witAI_lastcallTS = Math.floor(new Date());
+        witAI_lastcallTS = Date.now();
         console.log(output)
         stream.destroy()
+
         if (output && '_text' in output && output._text.length)
             return output._text
         if (output && 'text' in output && output.text.length)
@@ -399,6 +424,8 @@ async function transcribe_gspeech(buffer) {
 
   } catch (e) { console.log('transcribe_gspeech 368:' + e) }
 }
+
+//TODO add https://ilyanevolin.medium.com/discord-stt-bot-using-mozilla-deepspeech-e77ee28937eb
 
 //////////////////////////////////////////
 //////////////////////////////////////////
